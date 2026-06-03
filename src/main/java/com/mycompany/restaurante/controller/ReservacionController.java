@@ -3,15 +3,13 @@ package com.mycompany.restaurante.controller;
 import com.mycompany.restaurante.App;
 import com.mycompany.restaurante.dao.ReservacionDAO;
 import com.mycompany.restaurante.modelo.pojo.Reservacion;
-import com.mycompany.restaurante.utils.ConexionBD;
 import java.io.IOException;
 import java.net.URL;
 import java.sql.SQLException;
 import java.time.LocalDate;
 import java.util.List;
-import java.util.Optional;
-import java.util.UUID;
 import java.util.ResourceBundle;
+import java.util.UUID;
 import javafx.collections.FXCollections;
 import javafx.collections.ObservableList;
 import javafx.collections.transformation.FilteredList;
@@ -27,10 +25,10 @@ import javafx.scene.control.cell.PropertyValueFactory;
 import javafx.stage.Stage;
 
 /**
- * Controlador de UI para la administración integral de reservaciones.
- * Integra validaciones en tiempo de ejecución para aplicar cancelaciones
- * automáticas por impuntualidad tras un umbral de 15 minutos.
- * * @author Stephanie Hernandez
+ * Controlador de interfaz de usuario para la administración de reservaciones.
+ * Centraliza las acciones del formulario de persistencia y coordina los
+ * filtros de búsqueda reactiva en tiempo real sobre los componentes.
+ * * @author Stephanie Prieto
  */
 public class ReservacionController implements Initializable {
 
@@ -69,10 +67,12 @@ public class ReservacionController implements Initializable {
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12
         ));
 
-        colCliente.setCellValueFactory(new PropertyValueFactory<>("nombreCliente"));
+        colCliente.setCellValueFactory(
+                new PropertyValueFactory<>("nombreCliente"));
         colFecha.setCellValueFactory(new PropertyValueFactory<>("fecha"));
         colHora.setCellValueFactory(new PropertyValueFactory<>("hora"));
-        colPinguinos.setCellValueFactory(new PropertyValueFactory<>("numPersonas"));
+        colPinguinos.setCellValueFactory(
+                new PropertyValueFactory<>("numPersonas"));
         colMesa.setCellValueFactory(new PropertyValueFactory<>("idMesa"));
         colEstado.setCellValueFactory(new PropertyValueFactory<>("estado"));
         colID.setCellValueFactory(new PropertyValueFactory<>("folioUnico"));
@@ -98,31 +98,35 @@ public class ReservacionController implements Initializable {
             if (newSel != null) {
                 reservacionSeleccionada = newSel;
                 txtCliente.setText(newSel.getNombreCliente());
-                dpFecha.setValue(LocalDate.parse(newSel.getFecha()));
+                
+                if (newSel.getFecha() != null) {
+                    dpFecha.setValue(LocalDate.parse(newSel.getFecha()));
+                }
+                
                 if (newSel.getHora() != null && newSel.getHora().length() >= 5) {
                     cbHora.setValue(newSel.getHora().substring(0, 5));
                 }
+                
                 cbPinguinos.setValue(newSel.getNumPersonas());
                 cbMesa.setValue(newSel.getIdMesa());
             }
         });
     }
 
-/**
-     * Carga las reservaciones de la base de datos disparando previamente
-     * la depuración de tolerancia cronológica para limpiar retrasos.
+    /**
+     * Sincroniza la tabla visual invocando de forma previa la depuración
+     * automática de registros vencidos en el servidor de base de datos.
      */
     private void cargarDatosTabla() {
         modificandoTabla = true;
         try {
             reservacionesDao.depurarReservacionesVencidas();
-            
             List<Reservacion> deBD = 
                     reservacionesDao.obtenerTodasLasReservaciones();
             listaReservaciones.setAll(deBD);
             tablaReservaciones.refresh();
         } catch (SQLException e) { 
-            mostrarAlerta("Error", e.getMessage()); 
+            mostrarAlerta("Error de Sincronización", e.getMessage()); 
         } finally { 
             modificandoTabla = false; 
         }
@@ -145,65 +149,133 @@ public class ReservacionController implements Initializable {
 
     @FXML
     private void registrarReserva(ActionEvent event) {
-        if (txtCliente.getText().isEmpty() || dpFecha.getValue() == null 
-                || cbHora.getValue() == null) {
-            mostrarAlerta("Campos incompletos", "Completa todos los campos.");
+        if (txtCliente.getText().trim().isEmpty() || dpFecha.getValue() == null 
+                || cbHora.getValue() == null || cbMesa.getValue() == null 
+                || cbPinguinos.getValue() == null) {
+            mostrarAlerta("Campos incompletos", 
+                    "Es necesario llenar todos los campos del formulario.");
             return;
         }
 
         String folio = UUID.randomUUID().toString().substring(0, 8).toUpperCase();
-        java.time.LocalTime horaFormateada = java.time.LocalTime.parse(cbHora.getValue());
+        java.time.LocalTime horaFormateada = 
+                java.time.LocalTime.parse(cbHora.getValue());
         
         Reservacion nueva = new Reservacion(
-                0, folio, "TEMP_ID", txtCliente.getText(), 
-                cbMesa.getValue(), dpFecha.getValue().toString(), 
+                0, 
+                folio, 
+                "TEMP_ID", 
+                txtCliente.getText().trim(), 
+                cbMesa.getValue(), 
+                dpFecha.getValue().toString(), 
                 horaFormateada.toString() + ":00", 
-                cbPinguinos.getValue(), "Confirmada"
+                cbPinguinos.getValue(), 
+                "Confirmada"
         );
 
         try {
             if (reservacionesDao.insertarReservacion(nueva)) {
-                mostrarAlerta("Éxito", "Reservación guardada con folio: " + folio);
+                mostrarAlerta("Operación Exitosa", 
+                        "Reservación almacenada bajo el folio: " + folio);
                 cargarDatosTabla();
                 limpiarFormulario();
             }
         } catch (SQLException e) { 
-            mostrarAlerta("Error", e.getMessage()); 
+            mostrarAlerta("Error de Persistencia", e.getMessage()); 
+        }
+    }
+
+    /**
+     * Recompone los datos mediante una nueva instancia parametrizada para
+     * respetar el diseño inmutable del POJO y actualiza la fila en MySQL.
+     */
+    @FXML
+    private void modificarSeleccion(ActionEvent event) {
+        if (reservacionSeleccionada == null) {
+            mostrarAlerta("Selección requerida", 
+                    "Por favor selecciona una fila de la tabla para modificar.");
+            return;
+        }
+
+        if (txtCliente.getText().trim().isEmpty() || dpFecha.getValue() == null 
+                || cbHora.getValue() == null || cbMesa.getValue() == null 
+                || cbPinguinos.getValue() == null) {
+            mostrarAlerta("Campos incompletos", 
+                    "No se permiten campos vacíos durante la actualización.");
+            return;
+        }
+
+        try {
+            java.time.LocalTime horaFormateada = 
+                    java.time.LocalTime.parse(cbHora.getValue());
+            
+            // CONSTRUCCIÓN ATÓMICA: Creamos una nueva instancia limpia
+            Reservacion actualizada = new Reservacion(
+                    reservacionSeleccionada.getIdReservacion(),
+                    reservacionSeleccionada.getFolioUnico(),
+                    reservacionSeleccionada.getIdCliente(),
+                    txtCliente.getText().trim(),
+                    cbMesa.getValue(),
+                    dpFecha.getValue().toString(),
+                    horaFormateada.toString() + ":00",
+                    cbPinguinos.getValue(),
+                    reservacionSeleccionada.getEstado()
+            );
+
+            if (reservacionesDao.actualizarReservacion(actualizada)) {
+                mostrarAlerta("Éxito", "El registro fue actualizado.");
+                cargarDatosTabla();
+                limpiarFormulario();
+            } else {
+                mostrarAlerta("Error", "No se encontró el registro para actualizar.");
+            }
+        } catch (SQLException e) { 
+            System.err.println("Fallo en actualización SQL: " + e.getMessage());
+            mostrarAlerta("Error de Base de Datos", e.getMessage()); 
+        } catch (Exception e) {
+            mostrarAlerta("Error de Formato", "Revisa la integridad de los datos.");
         }
     }
 
     @FXML
-    private void modificarSeleccion(ActionEvent event) {
-        if (reservacionSeleccionada == null) return;
-        // Lógica de modificación secuencial...
-        cargarDatosTabla();
-        limpiarFormulario();
-    }
-
-    @FXML
     private void cancelarReserva(ActionEvent event) {
-        if (reservacionSeleccionada == null) return;
+        if (reservacionSeleccionada == null) {
+            mostrarAlerta("Selección requerida", 
+                    "Selecciona una fila de la tabla para proceder a la baja.");
+            return;
+        }
         try {
             if (reservacionesDao.cancelarReservacion(
                     reservacionSeleccionada.getIdReservacion())) {
-                mostrarAlerta("Cancelada", "Reservación dada de baja.");
+                mostrarAlerta("Estatus Actualizado", "La reservación pasó a 'Cancelada'.");
                 cargarDatosTabla();
                 limpiarFormulario();
             }
         } catch (SQLException e) { 
-            e.printStackTrace(); 
+            mostrarAlerta("Error", "No se pudo cancelar el registro: " + e.getMessage());
         }
     }
 
     @FXML
     private void handleRegresar(ActionEvent event) {
         try {
-            String fxml = (App.usuarioLogueado != null) 
-                    ? "Dashboard" : "VerMenuCliente";
-            FXMLLoader loader = App.getFXMLLoader(fxml);
+            String fxml = (App.usuarioLogueado != null) ? "Dashboard" : "VerMenuCliente";
+            FXMLLoader loader = new FXMLLoader(
+                    getClass().getResource("/fxml/" + fxml + ".fxml"));
             Parent root = loader.load();
-            Stage stage = (Stage) tablaReservaciones.getScene().getWindow();
+            
+            if ("Dashboard".equals(fxml)) {
+                DashboardController dc = loader.getController();
+                if (dc != null && App.usuarioLogueado != null) {
+                    dc.configurarUsuario(App.usuarioLogueado);
+                }
+            }
+
+            Stage stage = (Stage) ((Node) event.getSource()).getScene().getWindow();
             stage.setScene(new Scene(root));
+            stage.setTitle("Panel de Control");
+            stage.centerOnScreen();
+            stage.show();
         } catch (IOException e) { 
             e.printStackTrace(); 
         }
@@ -215,7 +287,15 @@ public class ReservacionController implements Initializable {
         reservacionSeleccionada = null;
         txtCliente.clear();
         dpFecha.setValue(LocalDate.now());
-        cbHora.setValue("13:00");
+        cbHora.getSelectionModel().clearSelection();
+        cbPinguinos.getSelectionModel().clearSelection();
+        cbMesa.getSelectionModel().clearSelection();
+        tablaReservaciones.getSelectionModel().clearSelection();
+    }
+
+    private void MathAlerta(String titulo, String mensaje) {
+        // Marcador formal para alertas
+        mostrarAlerta(titulo, mensaje);
     }
 
     private void mostrarAlerta(String t, String m) {
